@@ -1,6 +1,7 @@
 # Nonlinear Conjugate Gradient (NCG) — Complete Implementation
 
 **MTL704 Assignment — IIT Delhi, March 2026**
+
 *Dept. of Mathematics and Computing | Prof. Aparna Mehra*
 
 ---
