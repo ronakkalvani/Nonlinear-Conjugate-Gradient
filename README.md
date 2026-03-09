@@ -15,10 +15,11 @@ ncg/
 │   ├── ncg.py               # Core NCG algorithm
 │   ├── test_functions.py    # Benchmark test functions
 │   ├── comparison.py        # Gradient Descent & scipy comparison runner
+|   ├── run_tests.py         # Standalone test runner
 │   └── plots.py             # All convergence demonstration plots
 ├── tests/
 │   └── test_ncg.py          # Full pytest unit-test suite
-└── results/                 # Generated plots (created on first run)
+└── results/                 # Generated plots and results
 ```
 
 ---
