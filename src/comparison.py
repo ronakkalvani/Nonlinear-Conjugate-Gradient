@@ -5,17 +5,17 @@ Runs all four NCG beta variants, a pure Gradient Descent baseline, and
 scipy.optimize.minimize (L-BFGS-B) on every test problem, returning a
 unified comparison table.
 
-Fixes applied (exhaustive audit):
-  - GD success threshold corrected from tol*10 to tol
-  - scipy ftol no longer over-tightened (was tol**2); uses default now
-  - Removed unused import: Dict
-  - GD x_history now appends AFTER the update step (matching NCG's convention),
-    so x_history[-1] always equals the returned x
+Alignments with report (Sections 5, 6, 10, 11):
+  - GD success threshold: grad_norm < tol (strict, matching NCG convergence def)
+  - scipy: uses gtol=tol (gradient norm stopping); ftol=0 to disable function
+    tolerance so only gradient norm controls termination (Nocedal & Wright §7.2)
+  - GD x_history: appended AFTER update (index 0 = initial, index k = after step k)
+    matching NCG's convention for consistent plot comparisons
 """
 
 import numpy as np
 import time
-from typing import List, Any
+from typing import List
 from dataclasses import dataclass
 
 import scipy.optimize as opt
@@ -25,7 +25,7 @@ from test_functions import get_all_test_problems
 
 
 # ---------------------------------------------------------------------------
-# Gradient descent baseline (backtracking Armijo line search)
+# Gradient Descent baseline (backtracking Armijo line search)
 # ---------------------------------------------------------------------------
 
 def gradient_descent(f, grad_f, x0, tol=1e-6, max_iter=10000,
@@ -33,36 +33,31 @@ def gradient_descent(f, grad_f, x0, tol=1e-6, max_iter=10000,
     """
     Steepest-descent with backtracking Armijo line search.
 
-    Kept simple to serve as a performance baseline highlighting the
-    advantages of NCG on ill-conditioned problems.
+    Used as a performance baseline to highlight NCG's advantages on
+    ill-conditioned problems (see Section 11, Comparison with GD).
 
-    History convention: x_history[k] = iterate AFTER step k,
-    matching the NCG convention (x_history[0] = x0 before any step).
+    History convention: x_history[0] = x0 (before any step),
+    x_history[k+1] = iterate after step k. This matches NCG convention
+    so histories can be compared directly in plots.
     """
     x = np.array(x0, dtype=float).copy()
     nfev = ngev = 0
-    fun_hist   = []
-    gnorm_hist = []
-    x_hist     = []
+    fun_hist = []; gnorm_hist = []; x_hist = []
 
-    # Record initial state
-    fk    = f(x);       nfev += 1
-    gk    = grad_f(x);  ngev += 1
-    fun_hist.append(fk)
-    gnorm_hist.append(float(np.linalg.norm(gk)))
-    x_hist.append(x.copy())
+    fk = f(x);       nfev += 1
+    gk = grad_f(x);  ngev += 1
+    fun_hist.append(fk); gnorm_hist.append(float(np.linalg.norm(gk))); x_hist.append(x.copy())
 
     for k in range(max_iter):
         gnorm = float(np.linalg.norm(gk))
         if gnorm < tol:
             break
 
-        d = -gk                         # Steepest descent direction
-
-        # Backtracking Armijo line search
+        d = -gk
         alpha = alpha_init
-        dphi0 = np.dot(gk, d)          # = -||gk||^2 < 0
-        f_trial = fk                   # sentinel; will be updated in loop
+        dphi0 = np.dot(gk, d)  # = -||gk||^2 < 0
+        f_trial = fk
+
         for _ in range(50):
             nfev += 1
             f_trial = f(x + alpha * d)
@@ -70,22 +65,18 @@ def gradient_descent(f, grad_f, x0, tol=1e-6, max_iter=10000,
                 break
             alpha *= rho
 
-        # Update iterate — reuse f_trial from backtracking (no extra f eval)
-        x  = x + alpha * d
-        fk  = f_trial                  # already computed above
-        gk  = grad_f(x);  ngev += 1
-
-        # Append AFTER update (x_hist[k+1] = iterate after step k)
+        # Append AFTER update — consistent with NCG convention
+        x   = x + alpha * d
+        fk  = f_trial
+        gk  = grad_f(x); ngev += 1
         fun_hist.append(fk)
         gnorm_hist.append(float(np.linalg.norm(gk)))
         x_hist.append(x.copy())
 
-    return dict(
-        x=x, fun=fk, grad_norm=float(np.linalg.norm(gk)),
-        nit=k + 1, nfev=nfev, ngev=ngev,
-        fun_history=fun_hist, grad_norm_history=gnorm_hist, x_history=x_hist,
-        method="GD",
-    )
+    return dict(x=x, fun=fk, grad_norm=float(np.linalg.norm(gk)),
+                nit=k + 1, nfev=nfev, ngev=ngev,
+                fun_history=fun_hist, grad_norm_history=gnorm_hist,
+                x_history=x_hist, method="GD")
 
 
 # ---------------------------------------------------------------------------
@@ -96,32 +87,26 @@ def run_scipy(f, grad_f, x0, tol=1e-6, method="L-BFGS-B"):
     """
     Thin wrapper around scipy.optimize.minimize for comparison.
 
-    Fix: removed ftol=tol**2 (was excessively tight); uses scipy's default
-    ftol instead. gtol=tol correctly controls the gradient norm stopping criterion.
+    Uses gtol=tol (gradient norm) as the primary stopping criterion.
+    ftol=0 disables the function-value tolerance so only the gradient
+    norm controls termination — consistent with the convergence definition
+    ||∇f(xk)|| → 0 used throughout the report (Section 5).
     """
     nfev = [0]; ngev = [0]
 
-    def f_counted(x):
-        nfev[0] += 1
-        return f(x)
-
-    def g_counted(x):
-        ngev[0] += 1
-        return grad_f(x)
+    def f_counted(x): nfev[0] += 1; return f(x)
+    def g_counted(x): ngev[0] += 1; return grad_f(x)
 
     t0 = time.perf_counter()
-    res = opt.minimize(
-        f_counted, x0.copy(), jac=g_counted, method=method,
-        options={"gtol": tol, "ftol": 0, "maxiter": 10000},  # ftol=0: use only gtol
-    )
+    res = opt.minimize(f_counted, x0.copy(), jac=g_counted, method=method,
+                       options={"gtol": tol, "ftol": 0, "maxiter": 10000})
     elapsed = time.perf_counter() - t0
 
-    return dict(
-        x=res.x, fun=res.fun, grad_norm=float(np.linalg.norm(grad_f(res.x))),
-        nit=res.nit, nfev=nfev[0], ngev=ngev[0],
-        success=res.success, message=res.message,
-        elapsed=elapsed, method=f"scipy({method})",
-    )
+    return dict(x=res.x, fun=res.fun,
+                grad_norm=float(np.linalg.norm(grad_f(res.x))),
+                nit=res.nit, nfev=nfev[0], ngev=ngev[0],
+                success=res.success, message=res.message,
+                elapsed=elapsed, method=f"scipy({method})")
 
 
 # ---------------------------------------------------------------------------
@@ -148,83 +133,57 @@ def run_all_benchmarks(tol: float = 1e-6) -> List[BenchmarkRow]:
     rows: List[BenchmarkRow] = []
 
     for prob in problems:
-        name   = prob["name"]
-        f      = prob["f"]
-        gf     = prob["grad_f"]
-        x0     = prob["x0"]
-        x_star = prob["x_star"]
+        name = prob["name"]; f = prob["f"]; gf = prob["grad_f"]
+        x0 = prob["x0"];     x_star = prob["x_star"]
 
-        print(f"\n{'='*60}")
-        print(f"  {name}")
-        print(f"{'='*60}")
+        print(f"\n{'='*60}\n  {name}\n{'='*60}")
 
-        # --- NCG variants ----------------------------------------------------
         for variant in ["FR", "PR", "PR+", "HS"]:
             t0  = time.perf_counter()
             res = ncg_minimize(f, gf, x0.copy(), beta_variant=variant,
                                tol=tol, max_iter=5000)
             elapsed = time.perf_counter() - t0
             xerr = float(np.linalg.norm(res.x - x_star))
-
-            print(f"  NCG-{variant:3s}  iter={res.nit:5d}  "
-                  f"f={res.fun:+.3e}  ||grad_f||={res.grad_norm:.2e}  "
-                  f"||x-x*||={xerr:.2e}  {'OK' if res.success else '--'}")
-
-            rows.append(BenchmarkRow(
-                problem=name, method=f"NCG-{variant}",
+            print(f"  NCG-{variant:3s}  iter={res.nit:5d}  f={res.fun:+.3e}  "
+                  f"||grad_f||={res.grad_norm:.2e}  ||x-x*||={xerr:.2e}  "
+                  f"{'OK' if res.success else '--'}")
+            rows.append(BenchmarkRow(problem=name, method=f"NCG-{variant}",
                 nit=res.nit, nfev=res.nfev, ngev=res.ngev,
                 fun=res.fun, grad_norm=res.grad_norm,
-                success=res.success, elapsed_s=elapsed, x_error=xerr,
-            ))
+                success=res.success, elapsed_s=elapsed, x_error=xerr))
 
-        # --- Gradient Descent ------------------------------------------------
-        t0 = time.perf_counter()
-        gd = gradient_descent(f, gf, x0.copy(), tol=tol, max_iter=5000)
+        t0  = time.perf_counter()
+        gd  = gradient_descent(f, gf, x0.copy(), tol=tol, max_iter=5000)
         elapsed = time.perf_counter() - t0
         xerr = float(np.linalg.norm(gd["x"] - x_star))
-
-        # Fixed: success criterion uses tol (not tol*10)
-        gd_success = gd["grad_norm"] < tol
-
-        print(f"  GD       iter={gd['nit']:5d}  "
-              f"f={gd['fun']:+.3e}  ||grad_f||={gd['grad_norm']:.2e}  "
-              f"||x-x*||={xerr:.2e}  {'OK' if gd_success else '--'}")
-
-        rows.append(BenchmarkRow(
-            problem=name, method="GradDesc",
+        gd_success = gd["grad_norm"] < tol  # strict: same criterion as NCG
+        print(f"  GD       iter={gd['nit']:5d}  f={gd['fun']:+.3e}  "
+              f"||grad_f||={gd['grad_norm']:.2e}  ||x-x*||={xerr:.2e}  "
+              f"{'OK' if gd_success else '--'}")
+        rows.append(BenchmarkRow(problem=name, method="GradDesc",
             nit=gd["nit"], nfev=gd["nfev"], ngev=gd["ngev"],
             fun=gd["fun"], grad_norm=gd["grad_norm"],
-            success=gd_success, elapsed_s=elapsed, x_error=xerr,
-        ))
+            success=gd_success, elapsed_s=elapsed, x_error=xerr))
 
-        # --- scipy L-BFGS-B --------------------------------------------------
         sp   = run_scipy(f, gf, x0.copy(), tol=tol)
         xerr = float(np.linalg.norm(sp["x"] - x_star))
-
-        print(f"  scipy    iter={sp['nit']:5d}  "
-              f"f={sp['fun']:+.3e}  ||grad_f||={sp['grad_norm']:.2e}  "
-              f"||x-x*||={xerr:.2e}  {'OK' if sp['success'] else '--'}")
-
-        rows.append(BenchmarkRow(
-            problem=name, method="scipy(L-BFGS-B)",
+        print(f"  scipy    iter={sp['nit']:5d}  f={sp['fun']:+.3e}  "
+              f"||grad_f||={sp['grad_norm']:.2e}  ||x-x*||={xerr:.2e}  "
+              f"{'OK' if sp['success'] else '--'}")
+        rows.append(BenchmarkRow(problem=name, method="scipy(L-BFGS-B)",
             nit=sp["nit"], nfev=sp["nfev"], ngev=sp["ngev"],
             fun=sp["fun"], grad_norm=sp["grad_norm"],
-            success=sp["success"], elapsed_s=sp["elapsed"],
-            x_error=xerr,
-        ))
+            success=sp["success"], elapsed_s=sp["elapsed"], x_error=xerr))
 
     return rows
 
 
 def print_summary_table(rows: List[BenchmarkRow]) -> None:
     """Pretty-print benchmark results."""
-    print("\n\n" + "="*92)
-    print("SUMMARY TABLE")
-    print("="*92)
+    print("\n\n" + "="*92 + "\nSUMMARY TABLE\n" + "="*92)
     header = (f"{'Problem':<40} {'Method':<18} {'Iter':>6} "
               f"{'NFev':>6} {'||grad_f||':>12} {'||x-x*||':>10} {'OK':>4}")
-    print(header)
-    print("-"*92)
+    print(header); print("-"*92)
     prev_prob = ""
     for r in rows:
         sep = "" if r.problem == prev_prob else "\n"
